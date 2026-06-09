@@ -1,0 +1,349 @@
+clear; clc; close all;
+s = tf('s');
+
+% PLANT
+K=2.33e-1;
+z1=6.12e-2;
+z2=8.55e-2;
+p1=9.71e-2;
+p2=2.68e-2;
+p3=4.34e-3;
+p4=0.52e-3;
+Td=11.7;
+
+G_nodelay=K*(s+z1)*(s+z2)/((s+p1)*(s+p2)*(s+p3)*(s+p4));
+G_exact=zpk([-z1 -z2],[-p1 -p2 -p3 -p4],K,'InputDelay',Td);
+[numD,denD]=pade(Td,1);
+G_pade=minreal(tf(numD,denD)*G_nodelay);
+
+% SPECS
+Mp=0.03;
+Ts_required=1200;
+
+% Design slightly faster than required to leave margin
+Ts_design=950;
+zeta=-log(Mp)/sqrt(pi^2+log(Mp)^2);
+wn=4/(zeta*Ts_design);
+sigma=zeta*wn;
+wd=wn*sqrt(1-zeta^2);
+sd=-sigma+1j*wd;
+t=0:1:15000;
+fprintf('\nDesign pole used:\n');
+disp(sd);
+
+% MANUAL LEAD DESIGN
+
+% The lead compensator was designed to add the missing phase at the desired pole.
+% Its gain was then selected using the magnitude condition.
+
+angle_G=angle(evalfr(G_pade,sd))*180/pi;
+phi=mod(180-angle_G+180,360)-180;
+fprintf('\nAngle of G_pade at sd=%.2f deg\n',angle_G);
+fprintf('Required lead angle=%.2f deg\n',phi);
+
+% Lead zero chosen near slow plant pole
+z_lead=p3;
+angle_fun=@(p_lead) ...
+    (angle(sd+z_lead)-angle(sd+p_lead))*180/pi-phi;
+p_lead=fzero(angle_fun,[z_lead*1.01, 0.2]);
+Clead_shape=(s+z_lead)/(s+p_lead);
+Kc=1/abs(evalfr(Clead_shape*G_pade,sd));
+Clead=minreal(Kc*Clead_shape);
+fprintf('\nManual lead:\n');
+fprintf('z_lead=%.6e\n',z_lead);
+fprintf('p_lead=%.6e\n',p_lead);
+fprintf('Kc=%.6e\n',Kc);
+
+
+% MANUAL LAG DESIGN
+
+% The lag part was added mainly to improve the steady-state error.
+% The final lead-lag controller was then tested on the original delayed plant.
+
+% Need ess <= 0.02, so L(0) >= 49
+L0_lead=dcgain(Clead*G_pade);
+beta_needed=49/L0_lead;
+
+% Slightly above required beta, but not too aggressive
+beta=1.08*beta_needed;
+
+% Lag zero/pole close to origin
+z_lag=5e-4;
+p_lag=z_lag/beta;
+Clag=(s+z_lag)/(s+p_lag);
+Cleadlag=minreal(Clead*Clag);
+fprintf('\nManual lag:\n');
+fprintf('L0 lead=%.6f\n',L0_lead);
+fprintf('beta needed=%.6f\n',beta_needed);
+fprintf('beta used=%.6f\n',beta);
+fprintf('z_lag=%.6e\n',z_lag);
+fprintf('p_lag=%.6e\n',p_lag);
+
+% Verify Lead-Lag on exact plant
+T_LL=feedback(Cleadlag*G_exact,1);
+[yLL,tLL]=step(T_LL,t);
+info_LL=stepinfo(yLL,tLL,dcgain(T_LL));
+ess_LL=abs(1-dcgain(T_LL));
+fprintf('\nLead-Lag:\n');
+fprintf('Ts=%.2fs | OS=%.2f%% | ess=%.5f\n', ...
+    info_LL.SettlingTime, info_LL.Overshoot, ess_LL);
+figure;
+plot(tLL,yLL,'LineWidth',1.5);
+grid on;
+xlabel('Time [s]');
+ylabel('Output');
+title('Manual Lead-Lag Response');
+
+% MANUAL PID DESIGN
+
+% The PID controller was designed using two zeros, an integrator, and a derivative filter.
+% It was also verified on the original delayed plant, not only on the Pade approximation.
+
+% PID form:
+% Cpid=Kpid*(s+a)(s+b)/s
+% with derivative filter added:
+% Cpid_filtered=Kpid*(s+a)(s+b)/(s*(Tf*s+1))
+
+% Choose PID zeros near dominant slow dynamics
+a=7e-4;
+b=4e-3;
+Tf=25.774;
+Cpid_shape=((s+a)*(s+b))/(s*(Tf*s+1));
+
+% Used a slightly faster design pole for PID
+Ts_design_pid=900;
+wn_pid=4/(zeta*Ts_design_pid);
+sd_pid=-zeta*wn_pid+1j*wn_pid*sqrt(1-zeta^2);
+Kpid=1/abs(evalfr(Cpid_shape*G_pade,sd_pid));
+Cpid=minreal(Kpid*Cpid_shape);
+
+% Equivalent PID numerator before filter:
+% Kpid*(s+a)(s+b)/s = Kd*s + Kp + Ki/s
+Kd=Kpid;
+Kp=Kpid*(a+b);
+Ki=Kpid*a*b;
+fprintf('\nManual PID:\n');
+fprintf('a zero=%.6e\n',a);
+fprintf('b zero=%.6e\n',b);
+fprintf('Kpid=%.6e\n',Kpid);
+fprintf('Kp=%.6e\n',Kp);
+fprintf('Ki=%.6e\n',Ki);
+fprintf('Kd=%.6e\n',Kd);
+fprintf('Tf=%.6e\n',Tf);
+
+% Verify PID on exact plant
+T_PID=feedback(Cpid*G_exact,1);
+[yPID,tPID]=step(T_PID,t);
+info_PID=stepinfo(yPID,tPID,dcgain(T_PID));
+ess_PID=abs(1-dcgain(T_PID));
+fprintf('\nPID:\n');
+fprintf('Ts=%.2fs | OS=%.2f %% | ess=%.5f\n', ...
+    info_PID.SettlingTime, info_PID.Overshoot, ess_PID);
+figure;
+plot(tPID,yPID,'LineWidth',1.5);
+grid on;
+xlabel('Time [s]');
+ylabel('Output');
+title('Manual PID Response');
+
+
+% IDEAL COMPARISON
+
+% This comparison shows how close the actual compensater systems are to the desired
+% second-order behavior based on the project specifications.
+
+wn_ideal=4/(zeta*Ts_required);
+Tideal=tf(wn_ideal^2,[1 2*zeta*wn_ideal wn_ideal^2]);
+[yid,tid]=step(Tideal,t);
+figure;
+plot(tLL,yLL,'b','LineWidth',1.5); hold on;
+plot(tPID,yPID,'r','LineWidth',1.5);
+plot(tid,yid,'k--','LineWidth',1.5);
+legend('Lead-Lag','PID','Ideal 2nd Order');
+grid on;
+xlabel('Time [s]');
+ylabel('Output');
+title('Closed-Loop Response Comparison');
+
+% SPEC CHECKS
+fprintf('\n SPEC CHECK \n');
+check_specs(info_LL,ess_LL,'Lead-Lag');
+check_specs(info_PID,ess_PID,'PID');
+
+% CONTROL EFFORT USING PADE MODEL
+U_LL=minreal(Cleadlag/(1+Cleadlag*G_pade));
+U_PID=minreal(Cpid/(1+Cpid*G_pade));
+[uLL,tuLL]=step(U_LL,t);
+[uPID,tuPID]=step(U_PID,t);
+figure;
+plot(tuLL,uLL,'b','LineWidth',1.5); hold on;
+plot(tuPID,uPID,'r','LineWidth',1.5);
+legend('Lead-Lag','PID');
+grid on;
+xlabel('Time [s]');
+ylabel('u(t)');
+title('Control Effort');
+fprintf('\nControl effort:\n');
+fprintf('Lead-Lag umax=%.4e\n',max(abs(uLL)));
+fprintf('PID umax=%.4e\n',max(abs(uPID)));
+
+% MARGINS
+figure;
+margin(Cleadlag*G_pade);
+grid on;
+title('Lead-Lag Open-Loop Margin');
+figure;
+margin(Cpid*G_pade);
+grid on;
+title('PID Open-Loop Margin');
+
+% LOCAL FUNCTION
+function check_specs(info,ess,name)
+fprintf('\n%s:\n',name);
+fprintf('Ts=%.2f s\n',info.SettlingTime);
+fprintf('OS=%.2f %%\n',info.Overshoot);
+fprintf('ess=%.5f\n',ess);
+if info.SettlingTime<=1200
+    disp('Ts PASS');
+else
+    disp('Ts FAIL');
+end
+
+if info.Overshoot<=3
+    disp('OS PASS');
+else
+    disp('OS FAIL');
+end
+
+if ess<=0.02
+    disp('ess PASS');
+else
+    disp('ess FAIL');
+end
+end
+
+% EXPORT DATA FOR SIMULINK + REPORT
+fprintf('\n DATA FOR SIMULINK \n');
+% PLANT (NO DELAY) 
+[numG,denG]=tfdata(G_nodelay,'v');
+fprintf('\nPlant G(s) (no delay):\n');
+fprintf('Numerator:\n'); disp(numG);
+fprintf('Denominator:\n'); disp(denG);
+fprintf('Transport delay=%.2f s\n',Td);
+% LEAD-LAG CONTROLLER
+[numLL,denLL]=tfdata(Cleadlag,'v');
+fprintf('\nLead-Lag Controller:\n');
+fprintf('Numerator:\n'); disp(numLL);
+fprintf('Denominator:\n'); disp(denLL);
+
+% PID PARAMETERS
+fprintf('\nPID Parameters (Simulink):\n');
+fprintf('Kp=%.6e\n',Kp);
+fprintf('Ki=%.6e\n',Ki);
+fprintf('Kd=%.6e\n',Kd);
+fprintf('Filter coefficient=%.6e\n',1/Tf);
+
+% DELAY ROBUSTNESS TEST
+fprintf('\nDELAY ROBUSTNESS\n');
+delay_factors=[1 1.2 1.4 1.6];
+for k=1:length(delay_factors)
+    Td_new=Td*delay_factors(k);
+    G_var=zpk([-z1 -z2],[-p1 -p2 -p3 -p4],K,'InputDelay',Td_new);
+    T_LL_var=feedback(Cleadlag*G_var,1);
+    T_PID_var=feedback(Cpid*G_var,1);
+    info_LL_var=stepinfo(T_LL_var);
+    info_PID_var=stepinfo(T_PID_var);
+    fprintf('\nDelay factor=%.1f\n',delay_factors(k));
+    fprintf('Lead-Lag Ts=%.2f | OS=%.2f\n', ...
+        info_LL_var.SettlingTime, info_LL_var.Overshoot);
+    fprintf('PID Ts=%.2f | OS=%.2f\n', ...
+        info_PID_var.SettlingTime, info_PID_var.Overshoot);
+end
+format long e
+
+fprintf('\nHIGH PRECISION SIMULINK VALUES\n');
+[numG,denG]=tfdata(G_nodelay,'v');
+[numLL,denLL]=tfdata(Cleadlag,'v');
+[numPID,denPID]=tfdata(Cpid,'v');
+fprintf('\nPlant numerator:\n');
+disp(numG)
+fprintf('Plant denominator:\n');
+disp(denG)
+fprintf('\nLead-Lag numerator:\n');
+disp(numLL)
+fprintf('Lead-Lag denominator:\n');
+disp(denLL)
+fprintf('\nPID transfer function numerator:\n');
+disp(numPID)
+fprintf('PID transfer function denominator:\n');
+disp(denPID)
+fprintf('\nPID block parameters:\n');
+fprintf('Kp=%.12e\n',Kp);
+fprintf('Ki=%.12e\n',Ki);
+fprintf('Kd=%.12e\n',Kd);
+fprintf('N=%.12e\n',1/Tf);
+
+% DELAY ROBUSTNESS TEST (EXTREME: 10Td, 20Td, 30Td)
+fprintf('\n DELAY ROBUSTNESS (EXTREME) \n');
+delay_factors_extreme=[10 20 30];
+t_delay=0:1:60000;
+for k=1:length(delay_factors_extreme)
+    Td_new=Td*delay_factors_extreme(k);
+    G_var=zpk([-z1 -z2],[-p1 -p2 -p3 -p4],K,'InputDelay',Td_new);
+    T_LL_var=feedback(Cleadlag*G_var,1);
+    T_PID_var=feedback(Cpid*G_var,1);
+    [yLL_var,tLL_var]=step(T_LL_var,t_delay);
+    [yPID_var,tPID_var]=step(T_PID_var,t_delay);
+    
+    figure('Name', sprintf('Extreme Delay %dTd', delay_factors_extreme(k)));
+    subplot(2,1,1)
+    plot(tLL_var, yLL_var, 'b', 'LineWidth', 1.5)
+    grid on
+    title(sprintf('Lead-Lag Response (%dT_d)', delay_factors_extreme(k)))
+    xlabel('Time [s]')
+    ylabel('Output')
+    subplot(2,1,2)
+    plot(tPID_var, yPID_var, 'r', 'LineWidth', 1.5)
+    grid on
+    title(sprintf('PID Response (%dT_d)', delay_factors_extreme(k)))
+    xlabel('Time [s]')
+    ylabel('Output')
+
+    % STEP INFO WITH SPECIFIED FINAL VALUE
+    yfinal_LL=dcgain(T_LL_var);
+    yfinal_PID=dcgain(T_PID_var);
+    info_LL_var=stepinfo(yLL_var, tLL_var, yfinal_LL);
+    info_PID_var=stepinfo(yPID_var, tPID_var, yfinal_PID);
+    fprintf('\nDelay=%dTd\n', delay_factors_extreme(k));
+    fprintf('Lead-Lag Ts=%.2f | OS=%.2f\n', ...
+        info_LL_var.SettlingTime, info_LL_var.Overshoot);
+    fprintf('PID Ts=%.2f | OS=%.2f\n', ...
+        info_PID_var.SettlingTime, info_PID_var.Overshoot);
+
+    % STORE FOR PLOTTING SCRIPT 
+    dataLL.time=tLL_var;
+    dataLL.signals.values=yLL_var;
+    dataPID.time=tPID_var;
+    dataPID.signals.values=yPID_var;
+    switch delay_factors_extreme(k)
+        case 10
+            out.y_ll_d10=dataLL;
+            out.y_pid_d10=dataPID;
+        case 20
+            out.y_ll_d20=dataLL;
+            out.y_pid_d20=dataPID;
+        case 30
+            out.y_ll_d30=dataLL;
+            out.y_pid_d30=dataPID;
+    end
+end
+
+Td
+Cleadlag
+Cpid
+numG
+denG
+numLL
+denLL
+numPID
+denPID

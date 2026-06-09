@@ -1,0 +1,54 @@
+clc; close all;
+
+% ===== SETTINGS =====
+outFolder = fullfile(pwd, 'figures');  % robust absolute path
+if ~exist(outFolder,'dir')
+    mkdir(outFolder);
+end
+
+set(0,'DefaultLineLineWidth',2)
+set(0,'DefaultAxesFontSize',14)
+
+% ===== HELPER FUNCTION =====
+function saveplot(data, title_str, ylabel_str, color, filename)
+    t = data.time;
+    y = data.signals.values;
+
+    figure('Color','w')
+    plot(t, y, color)
+    xlabel('Time (s)')
+    ylabel(ylabel_str)
+    title(title_str)
+    grid on
+
+    exportgraphics(gcf, filename, 'Resolution', 300)
+    close
+end
+
+% ===== BASE RESPONSES =====
+saveplot(out.y_ll,  'Lead-Lag Response (Base)', 'Output', 'b', fullfile(outFolder,'base_leadlag.png'))
+saveplot(out.y_pid, 'PID Response (Base)',      'Output', 'r', fullfile(outFolder,'base_pid.png'))
+
+% ===== CONTROL EFFORT =====
+saveplot(out.u_ll,  'Lead-Lag Control Effort', 'u(t)', 'b', fullfile(outFolder,'u_leadlag.png'))
+saveplot(out.u_pid, 'PID Control Effort',      'u(t)', 'r', fullfile(outFolder,'u_pid.png'))
+
+% ===== SATURATION =====
+saveplot(out.y_ll_sat,  'Lead-Lag with Saturation', 'Output', 'b', fullfile(outFolder,'sat_leadlag.png'))
+saveplot(out.y_pid_sat, 'PID with Saturation',      'Output', 'r', fullfile(outFolder,'sat_pid.png'))
+
+% ===== NOISE =====
+saveplot(out.y_ll_noise,  'Lead-Lag with Noise', 'Output', 'b', fullfile(outFolder,'noise_leadlag.png'))
+saveplot(out.y_pid_noise, 'PID with Noise',      'Output', 'r', fullfile(outFolder,'noise_pid.png'))
+
+% ===== DELAY ROBUSTNESS =====
+saveplot(out.y_ll_d12,  'Lead-Lag (1.2Td)', 'Output', 'b', fullfile(outFolder,'delay12_leadlag.png'))
+saveplot(out.y_pid_d12, 'PID (1.2Td)',      'Output', 'r', fullfile(outFolder,'delay12_pid.png'))
+
+saveplot(out.y_ll_d14,  'Lead-Lag (1.4Td)', 'Output', 'b', fullfile(outFolder,'delay14_leadlag.png'))
+saveplot(out.y_pid_d14, 'PID (1.4Td)',      'Output', 'r', fullfile(outFolder,'delay14_pid.png'))
+
+saveplot(out.y_ll_d16,  'Lead-Lag (1.6Td)', 'Output', 'b', fullfile(outFolder,'delay16_leadlag.png'))
+saveplot(out.y_pid_d16, 'PID (1.6Td)',      'Output', 'r', fullfile(outFolder,'delay16_pid.png'))
+
+disp('All PNG figures successfully generated in the /figures folder.')
